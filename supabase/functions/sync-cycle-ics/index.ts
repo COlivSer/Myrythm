@@ -80,17 +80,34 @@ function parseICSForPeriods(icsText: string, keywords: string[] = ["period", "me
   return entries;
 }
 
+function isValidICSUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !!url.hostname;
+  } catch {
+    return false;
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-    const { user_id, ics_url, keywords } = await req.json();
+    if (!supabaseUrl || !serviceRoleKey) {
+      return new Response(
+        JSON.stringify({ error: "Server is missing Supabase environment configuration." }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const body = await req.json().catch(() => null as any);
+    const { user_id, ics_url, keywords } = body ?? {};
 
     if (!user_id || !ics_url) {
       return new Response(
@@ -99,14 +116,49 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const response = await fetch(ics_url, {
-      headers: { "User-Agent": "My-Rhythm-App/1.0" },
-    });
+    if (!isValidICSUrl(ics_url)) {
+      return new Response(
+        JSON.stringify({ error: "The iCal URL is invalid. Use a valid http/https calendar link." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(ics_url, {
+        headers: {
+          "User-Agent": "My-Rhythm-App/1.0",
+          Accept: "text/calendar, text/plain, */*",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown network error";
+      return new Response(
+        JSON.stringify({ error: `Connection error while fetching your calendar: ${message}` }),
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (!response.ok) {
+      const status = response.status;
+      let reason = `Failed to fetch calendar (${status})`;
+      if (status === 401 || status === 403) reason = "The calendar URL is private or requires authentication.";
+      else if (status === 404) reason = "The calendar URL could not be found.";
+      else if (status >= 500) reason = "The calendar server is unavailable right now.";
+
       return new Response(
-        JSON.stringify({ error: `Failed to fetch calendar: ${response.status}` }),
+        JSON.stringify({ error: reason }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType && !contentType.toLowerCase().includes("calendar") && !contentType.toLowerCase().includes("text/plain")) {
+      return new Response(
+        JSON.stringify({ error: "The URL does not look like an iCal calendar feed." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -161,8 +213,9 @@ Deno.serve(async (req: Request) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown sync error";
     return new Response(
-      JSON.stringify({ error: err.message }),
+      JSON.stringify({ error: `Calendar sync failed: ${message}` }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

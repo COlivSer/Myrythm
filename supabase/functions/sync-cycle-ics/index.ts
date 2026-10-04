@@ -111,7 +111,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const icsText = await response.text();
-    const periods = parseICSForPeriods(icsText, keywords ?? ["period", "menstrual", "cycle", "menstruation"]);
+    const periods = parseICSForPeriods(icsText, keywords ?? ["period", "menstrual", "cycle", "menstruation","regla"]);
 
     if (periods.length === 0) {
       return new Response(

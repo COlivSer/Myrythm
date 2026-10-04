@@ -221,10 +221,11 @@ export const DEFAULT_REWARDS = [
 ];
 
 export const CYCLE_PHASES = [
-  { key: 'menstrual', label: 'Menstrual', color: '#ef4444', dayRange: [0, 5] },
-  { key: 'follicular', label: 'Follicular', color: '#22c55e', dayRange: [6, 13] },
-  { key: 'ovulation', label: 'Ovulation', color: '#3b82f6', dayRange: [14, 16] },
-  { key: 'luteal', label: 'Luteal', color: '#f59e0b', dayRange: [17, 28] },
+  { key: 'menstrual', label: 'Regla', color: '#ef4444', matchKeyword: '[Predicció] Regla' },
+  { key: 'follicular', label: 'Fol·licular', color: '#22c55e', matchKeyword: '[Fase] Fol·licular' },
+  { key: 'ovulation', label: 'Ovulatòria / Fèrtil', color: '#3b82f6', matchKeyword: '[Fase] Ovulatòria / Fèrtil' },
+  { key: 'luteal_1', label: 'Lútea 1', color: '#f59e0b', matchKeyword: '[Fase] Lútea 1' },
+  { key: 'luteal_2', label: 'Lútea 2', color: '#d97706', matchKeyword: '[Fase] Lútea 2' },
 ];
 
 export const DEFAULT_CYCLE_LENGTH = 28;

@@ -237,30 +237,4 @@ export const MONTH_NAMES = [
 
 export const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export const NOTIFICATION_MESSAGES = [
-  'How was today? 🌙',
-  'Quick check-in? ✨',
-  'Before the day ends — anything to log?',
-  'How did today go?',
-  'Any wins to record today? ⭐',
-];
-
-export const NOTIFICATION_MESSAGES_HAS_STATE = [
-  'Any wins to add today? ⭐',
-  'Anything else to log today?',
-  'Quick — any wins to record? ⭐',
-];
-
-export const NOTIFICATION_MESSAGES_HAS_TRAINING = [
-  'Anything else to log today?',
-  'Quick check-in? ✨',
-  'How did today go?',
-];
-
-export const NOTIFICATION_MESSAGES_HAS_ALL = [
-  'How was today? 🌙',
-  'Quick check-in? ✨',
-  'How did today go?',
-];
-
 export const DEFAULT_CHECKIN_TIME = '20:00';

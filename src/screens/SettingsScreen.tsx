@@ -1021,9 +1021,21 @@ function CycleEditor({ onBack }: { onBack: () => void }) {
 // NOTIFICATIONS EDITOR
 // =====================================================
 function NotificationsEditor({ onBack }: { onBack: () => void }) {
-  const { settings, permission, loading, requestPermission, recheckPermission: recheckFromHook, updateSettings } = useNotifications();
+  const {
+    settings, permission, loading, pushSupported,
+    requestPermission, recheckPermission: recheckFromHook,
+    updateSettings, subscribeToPush, unsubscribeFromPush, hasPushSubscription,
+  } = useNotifications();
   const [showExplanation, setShowExplanation] = useState(false);
   const [pendingEnable, setPendingEnable] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [subscribing, setSubscribing] = useState(false);
+
+  useEffect(() => {
+    if (settings?.checkin_enabled) {
+      hasPushSubscription().then(setPushSubscribed);
+    }
+  }, [settings?.checkin_enabled, hasPushSubscription]);
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><div className="w-8 h-8 border-3 border-blue-200 border-t-blue-500 rounded-full animate-spin" /></div>;
@@ -1032,42 +1044,52 @@ function NotificationsEditor({ onBack }: { onBack: () => void }) {
   async function handleToggle() {
     if (!settings) return;
     if (!settings.checkin_enabled) {
-      if (permission === 'granted') {
-        await updateSettings({ checkin_enabled: true });
-      } else if (permission === 'default') {
-        setShowExplanation(true);
-        setPendingEnable(true);
-      } else {
-        setShowExplanation(true);
-        setPendingEnable(true);
-      }
+      setShowExplanation(true);
+      setPendingEnable(true);
     } else {
       await updateSettings({ checkin_enabled: false });
+      await unsubscribeFromPush();
+      setPushSubscribed(false);
     }
   }
 
-  async function handleRequestPermission() {
+  async function handleEnable() {
+    if (!settings) return;
+    setSubscribing(true);
     const result = await requestPermission();
     setShowExplanation(false);
-    if (result === 'granted' && pendingEnable) {
-      await updateSettings({ checkin_enabled: true });
-      setPendingEnable(false);
+    if (result === 'granted') {
+      const subOk = await subscribeToPush();
+      if (subOk) {
+        await updateSettings({ checkin_enabled: true });
+        setPushSubscribed(true);
+      }
     }
+    setPendingEnable(false);
+    setSubscribing(false);
   }
 
-  const isUnsupported = permission === 'unsupported';
+  const isUnsupported = permission === 'unsupported' || !pushSupported;
   const isDenied = permission === 'denied';
 
   async function recheckPermission() {
     const current = recheckFromHook();
     if (current === 'granted' && pendingEnable) {
-      await updateSettings({ checkin_enabled: true });
-      setPendingEnable(false);
+      const subOk = await subscribeToPush();
+      if (subOk) {
+        await updateSettings({ checkin_enabled: true });
+        setPushSubscribed(true);
+        setPendingEnable(false);
+      }
     } else if (current === 'default') {
       const fresh = await requestPermission();
       if (fresh === 'granted' && pendingEnable) {
-        await updateSettings({ checkin_enabled: true });
-        setPendingEnable(false);
+        const subOk = await subscribeToPush();
+        if (subOk) {
+          await updateSettings({ checkin_enabled: true });
+          setPushSubscribed(true);
+          setPendingEnable(false);
+        }
       }
     }
   }
@@ -1122,8 +1144,13 @@ function NotificationsEditor({ onBack }: { onBack: () => void }) {
               />
             </div>
             <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
-              Uses your device's local time. One reminder per day maximum.
+              One reminder per day maximum, even if you close the app.
             </p>
+            {pushSubscribed && (
+              <p className="text-xs mt-1.5 flex items-center gap-1" style={{ color: 'var(--color-success)' }}>
+                <Check size={12} /> Push notifications are active on this device.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -1132,7 +1159,7 @@ function NotificationsEditor({ onBack }: { onBack: () => void }) {
       {isUnsupported && (
         <div className="card p-4" style={{ backgroundColor: 'var(--color-warning-light)' }}>
           <p className="text-sm font-medium" style={{ color: '#92400e' }}>
-            Notifications are not supported on this device.
+            Push notifications are not supported on this device. Try Chrome or Edge on Android, or Chrome on desktop.
           </p>
         </div>
       )}
@@ -1168,15 +1195,17 @@ function NotificationsEditor({ onBack }: { onBack: () => void }) {
           <div className="bg-white w-full max-w-[480px] rounded-t-3xl p-6 space-y-4 animate-slide-up" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2">
               <Bell size={24} color="var(--color-primary)" />
-              <h3 className="text-lg font-bold" style={{ color: 'var(--color-text)' }}>Enable notifications?</h3>
+              <h3 className="text-lg font-bold" style={{ color: 'var(--color-text)' }}>Enable push notifications?</h3>
             </div>
             <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-              Get a gentle reminder at the end of the day to record how things went. We'll only send one reminder per day, and you can turn it off anytime.
+              Get a gentle daily reminder to record how your day went — even when this app isn't open. We'll only send one reminder per day, and you can turn it off anytime.
             </p>
             {!isDenied && (
               <div className="flex gap-3">
                 <button onClick={() => setShowExplanation(false)} className="btn-secondary flex-1">Not now</button>
-                <button onClick={handleRequestPermission} className="btn-primary flex-1">Allow</button>
+                <button onClick={handleEnable} disabled={subscribing} className="btn-primary flex-1">
+                  {subscribing ? 'Enabling...' : 'Allow'}
+                </button>
               </div>
             )}
             {isDenied && (
@@ -1194,8 +1223,8 @@ function NotificationsEditor({ onBack }: { onBack: () => void }) {
       {/* Info */}
       <div className="card p-4 space-y-2">
         <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--color-text-muted)' }}>How it works</p>
-        <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>At your chosen time, you'll get a short notification asking how your day went. Tap it to open a quick check-in — just pick Good, OK, or Hard, optionally log a win, and you're done in seconds.</p>
-        <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>If you've already logged everything, we won't bother you. One reminder per day, no guilt trips.</p>
+        <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>At your chosen time, you'll get a push notification asking how your day went — even if the app is closed. Tap it to open a quick check-in.</p>
+        <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>One reminder per day, no guilt trips. You can turn it off anytime.</p>
       </div>
     </div>
   );

@@ -1,30 +1,24 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
-import type { NotificationSettings, PushSubscriptionRow } from '@/lib/types';
-import { DEFAULT_CHECKIN_TIME } from '@/lib/constants';
+import { todayString } from '@/lib/date';
+import type { NotificationSettings, DailyLog, TrainingWin, NutritionWin } from '@/lib/types';
+import {
+  NOTIFICATION_MESSAGES,
+  NOTIFICATION_MESSAGES_HAS_STATE,
+  NOTIFICATION_MESSAGES_HAS_TRAINING,
+  NOTIFICATION_MESSAGES_HAS_ALL,
+  DEFAULT_CHECKIN_TIME,
+} from '@/lib/constants';
 
 type PermissionState = 'granted' | 'denied' | 'default' | 'unsupported';
-
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string;
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
 
 export function useNotifications() {
   const { user } = useAuth();
   const [settings, setSettings] = useState<NotificationSettings | null>(null);
   const [permission, setPermission] = useState<PermissionState>('default');
   const [loading, setLoading] = useState(true);
-  const [pushSupported, setPushSupported] = useState(false);
+  const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!('Notification' in window)) {
@@ -32,7 +26,6 @@ export function useNotifications() {
     } else {
       setPermission(Notification.permission as PermissionState);
     }
-    setPushSupported('serviceWorker' in navigator && 'PushManager' in window);
   }, []);
 
   const loadSettings = useCallback(async () => {
@@ -88,83 +81,99 @@ export function useNotifications() {
     if (data) setSettings(data as NotificationSettings);
   }, [user, settings]);
 
-  const subscribeToPush = useCallback(async (): Promise<boolean> => {
-    if (!user || !pushSupported || !VAPID_PUBLIC_KEY) return false;
-
-    try {
-      const reg = await navigator.serviceWorker.ready;
-      let subscription = await reg.pushManager.getSubscription();
-
-      if (!subscription) {
-        subscription = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-        });
-      }
-
-      const sub = subscription.toJSON();
-      const endpoint = subscription.endpoint;
-      const p256dh = sub.keys?.p256dh;
-      const auth = sub.keys?.auth;
-
-      if (!endpoint || !p256dh || !auth) return false;
-
-      await supabase
-        .from('push_subscriptions')
-        .upsert({
-          user_id: user.id,
-          endpoint,
-          p256dh,
-          auth,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'endpoint' });
-
-      return true;
-    } catch {
-      return false;
-    }
-  }, [user, pushSupported]);
-
-  const unsubscribeFromPush = useCallback(async (): Promise<boolean> => {
-    if (!user || !pushSupported) return false;
-
-    try {
-      const reg = await navigator.serviceWorker.ready;
-      const subscription = await reg.pushManager.getSubscription();
-      if (subscription) {
-        await subscription.unsubscribe();
-      }
-      await supabase
-        .from('push_subscriptions')
-        .delete()
-        .eq('user_id', user.id);
-      return true;
-    } catch {
-      return false;
-    }
-  }, [user, pushSupported]);
-
-  const hasPushSubscription = useCallback(async (): Promise<boolean> => {
-    if (!user || !pushSupported) return false;
-    const { data } = await supabase
-      .from('push_subscriptions')
-      .select('id')
-      .eq('user_id', user.id)
-      .limit(1);
-    return ((data as PushSubscriptionRow[] | null) ?? []).length > 0;
-  }, [user, pushSupported]);
-
   return {
     settings,
     permission,
     loading,
-    pushSupported,
     requestPermission,
     recheckPermission,
     updateSettings,
-    subscribeToPush,
-    unsubscribeFromPush,
-    hasPushSubscription,
     reload: loadSettings,
   };
+}
+
+function getRandomMessage(messages: string[]): string {
+  return messages[Math.floor(Math.random() * messages.length)];
+}
+
+async function getTodayCheckinStatus(userId: string): Promise<{
+  hasState: boolean;
+  hasTraining: boolean;
+  hasNutrition: boolean;
+}> {
+  const today = todayString();
+  const [logRes, trainRes, nutRes] = await Promise.all([
+    supabase.from('daily_logs').select('daily_state').eq('user_id', userId).eq('date', today).maybeSingle(),
+    supabase.from('training_wins').select('id').eq('user_id', userId).eq('date', today),
+    supabase.from('nutrition_wins').select('id').eq('user_id', userId).eq('date', today),
+  ]);
+  const log = logRes.data as DailyLog | null;
+  return {
+    hasState: !!log?.daily_state,
+    hasTraining: ((trainRes.data as TrainingWin[] | null) ?? []).length > 0,
+    hasNutrition: ((nutRes.data as NutritionWin[] | null) ?? []).length > 0,
+  };
+}
+
+export function getAdaptiveMessage(status: { hasState: boolean; hasTraining: boolean; hasNutrition: boolean }): string {
+  if (status.hasState && status.hasTraining && status.hasNutrition) {
+    return getRandomMessage(NOTIFICATION_MESSAGES_HAS_ALL);
+  }
+  if (status.hasState && (status.hasTraining || status.hasNutrition)) {
+    return getRandomMessage(NOTIFICATION_MESSAGES_HAS_STATE);
+  }
+  if (status.hasTraining && !status.hasNutrition) {
+    return getRandomMessage(NOTIFICATION_MESSAGES_HAS_TRAINING);
+  }
+  return getRandomMessage(NOTIFICATION_MESSAGES);
+}
+
+export async function shouldSendNotification(userId: string, settings: NotificationSettings): Promise<{ shouldSend: boolean; message: string }> {
+  if (!settings.checkin_enabled) return { shouldSend: false, message: '' };
+  const today = todayString();
+  if (settings.last_notification_date === today) return { shouldSend: false, message: '' };
+  const status = await getTodayCheckinStatus(userId);
+  if (status.hasState && status.hasTraining && status.hasNutrition) {
+    return { shouldSend: false, message: '' };
+  }
+  return { shouldSend: true, message: getAdaptiveMessage(status) };
+}
+
+export function useNotificationScheduler() {
+  const { user } = useAuth();
+  const { settings, permission } = useNotifications();
+  const checkedTodayRef = useRef(false);
+
+  const checkAndNotify = useCallback(async () => {
+    if (!user || !settings || permission !== 'granted') return;
+    const now = new Date();
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const [settingsHour, settingsMin] = settings.checkin_time.split(':').map(Number);
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const targetMinutes = settingsHour * 60 + settingsMin;
+    if (nowMinutes < targetMinutes) return;
+
+    const { shouldSend, message } = await shouldSendNotification(user.id, settings);
+    if (!shouldSend) return;
+
+    try {
+      new Notification('My Rhythm', { body: message, tag: 'rhythm-checkin', silent: true });
+      await supabase.from('notification_settings').update({ last_notification_date: todayString() }).eq('id', settings.id);
+    } catch {
+      // notification failed — try again next tick
+    }
+  }, [user, settings, permission]);
+
+  useEffect(() => {
+    if (!settings || permission !== 'granted') return;
+    const interval = setInterval(() => {
+      checkAndNotify();
+    }, 60000);
+    checkAndNotify();
+    return () => clearInterval(interval);
+  }, [checkAndNotify, settings, permission]);
+
+  useEffect(() => {
+    checkedTodayRef.current = false;
+  }, [settings?.user_id]);
 }

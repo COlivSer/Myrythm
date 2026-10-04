@@ -1,5 +1,2 @@
 [functions.sync-cycle-ics]
 verify_jwt = true
-
-[functions.push-daily-checkin]
-verify_jwt = false

@@ -8,16 +8,15 @@ import { InsightsScreen } from '@/screens/InsightsScreen';
 import { ToolkitScreen } from '@/screens/ToolkitScreen';
 import { SettingsScreen } from '@/screens/SettingsScreen';
 import { QuickCheckIn } from '@/components/QuickCheckIn';
-
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
-}
+import { useNotificationScheduler } from '@/lib/notifications';
 
 function AppContent() {
   const { session, loading } = useAuth();
   const [tab, setTab] = useState<TabKey>('today');
   const [toolkitCategory, setToolkitCategory] = useState<string | null>(null);
   const [showQuickCheckIn, setShowQuickCheckIn] = useState(false);
+
+  useNotificationScheduler();
 
   useEffect(() => {
     if (tab !== 'toolkit') setToolkitCategory(null);

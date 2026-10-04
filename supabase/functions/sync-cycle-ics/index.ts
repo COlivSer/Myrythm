@@ -30,7 +30,7 @@ function parseICSDate(dateStr: string): string | null {
   return null;
 }
 
-function parseICSForPeriods(icsText: string, keywords: string[] = ["period", "menstrual", "cycle", "menstruation"]): ICSPeriodEntry[] {
+function parseICSForPeriods(icsText: string, keywords: string[] = ["period", "menstrual", "cycle", "menstruation", "regla"]): ICSPeriodEntry[] {
   const entries: ICSPeriodEntry[] = [];
   const lines = icsText.split(/\r?\n/);
   let inEvent = false;

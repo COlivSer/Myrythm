@@ -7,37 +7,57 @@ export interface ICSIntegrationSettings {
   last_sync_added: number;
 }
 
-export async function getICSIntegration(userId: string): Promise<{ enabled: boolean; settings: ICSIntegrationSettings | null }> {
-  const { data } = await supabase
+export async function getICSIntegration(
+  userId: string
+): Promise<{ enabled: boolean; settings: ICSIntegrationSettings | null }> {
+  const { data, error } = await supabase
     .from('integration_settings')
-    .select('*')
+    .select('enabled, settings')
     .eq('user_id', userId)
     .eq('integration_key', 'google_calendar_ics')
     .maybeSingle();
-  if (!data) return { enabled: false, settings: null };
+
+  if (error || !data) return { enabled: false, settings: null };
+
   return {
-    enabled: (data as { enabled: boolean }).enabled,
-    settings: (data as { settings: ICSIntegrationSettings }).settings,
+    enabled: Boolean(data.enabled),
+    settings: (data.settings as ICSIntegrationSettings) ?? null,
   };
 }
 
 export async function saveICSUrl(userId: string, icsUrl: string): Promise<void> {
-  await supabase
+  // Fetch existing settings to preserve last_synced_at / last_sync_added
+  const existing = await getICSIntegration(userId);
+
+  const updatedSettings: ICSIntegrationSettings = {
+    ics_url: icsUrl,
+    last_synced_at: existing.settings?.last_synced_at ?? null,
+    last_sync_added: existing.settings?.last_sync_added ?? 0,
+  };
+
+  const { error } = await supabase
     .from('integration_settings')
-    .upsert({
-      user_id: userId,
-      integration_key: 'google_calendar_ics',
-      enabled: true,
-      settings: { ics_url: icsUrl, last_synced_at: null, last_sync_added: 0 },
-    }, { onConflict: 'user_id,integration_key' });
+    .upsert(
+      {
+        user_id: userId,
+        integration_key: 'google_calendar_ics',
+        enabled: true,
+        settings: updatedSettings,
+      },
+      { onConflict: 'user_id,integration_key' }
+    );
+
+  if (error) throw new Error(error.message);
 }
 
 export async function disableICSSync(userId: string): Promise<void> {
-  await supabase
+  const { error } = await supabase
     .from('integration_settings')
     .update({ enabled: false })
     .eq('user_id', userId)
     .eq('integration_key', 'google_calendar_ics');
+
+  if (error) throw new Error(error.message);
 }
 
 export interface SyncResult {
@@ -48,27 +68,25 @@ export interface SyncResult {
 }
 
 export async function syncCycleFromICS(userId: string, icsUrl: string): Promise<SyncResult> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-  const functionUrl = `${supabaseUrl}/functions/v1/sync-cycle-ics`;
-
-  const response = await fetch(functionUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${anonKey}`,
-      apikey: anonKey,
-    },
-    body: JSON.stringify({ user_id: userId, ics_url: icsUrl }),
+  // Use official Supabase client invoke method to pass the logged-in user's Auth token automatically
+  const { data, error } = await supabase.functions.invoke('sync-cycle-ics', {
+    body: { user_id: userId, ics_url: icsUrl },
   });
 
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    return { added: 0, skipped: 0, total: 0, error: body.error ?? `Sync failed (${response.status})` };
+  if (error) {
+    return {
+      added: 0,
+      skipped: 0,
+      total: 0,
+      error: error.message || 'Sync failed',
+    };
   }
 
-  const data = await response.json();
-  return { added: data.added ?? 0, skipped: data.skipped ?? 0, total: data.total ?? 0 };
+  return {
+    added: data?.added ?? 0,
+    skipped: data?.skipped ?? 0,
+    total: data?.total ?? 0,
+  };
 }
 
 export function useCycleSync() {

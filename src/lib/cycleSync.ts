@@ -47,28 +47,69 @@ export interface SyncResult {
   error?: string;
 }
 
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = 20000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function syncCycleFromICS(userId: string, icsUrl: string): Promise<SyncResult> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-  const functionUrl = `${supabaseUrl}/functions/v1/sync-cycle-ics`;
 
-  const response = await fetch(functionUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${anonKey}`,
-      apikey: anonKey,
-    },
-    body: JSON.stringify({ user_id: userId, ics_url: icsUrl }),
-  });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    return { added: 0, skipped: 0, total: 0, error: body.error ?? `Sync failed (${response.status})` };
+  if (!supabaseUrl || !anonKey) {
+    return {
+      added: 0,
+      skipped: 0,
+      total: 0,
+      error: 'Missing Supabase config for calendar sync.',
+    };
   }
 
-  const data = await response.json();
-  return { added: data.added ?? 0, skipped: data.skipped ?? 0, total: data.total ?? 0 };
+  const functionUrl = `${supabaseUrl}/functions/v1/sync-cycle-ics`;
+
+  try {
+    const response = await fetchWithTimeout(functionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${anonKey}`,
+        apikey: anonKey,
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ user_id: userId, ics_url: icsUrl }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      return {
+        added: 0,
+        skipped: 0,
+        total: 0,
+        error: body.error ?? `Sync failed (${response.status})`,
+      };
+    }
+
+    const data = await response.json();
+    return { added: data.added ?? 0, skipped: data.skipped ?? 0, total: data.total ?? 0 };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown network error';
+    return {
+      added: 0,
+      skipped: 0,
+      total: 0,
+      error: `Connection error while syncing your calendar: ${message}`,
+    };
+  }
 }
 
 export function useCycleSync() {
